@@ -6,6 +6,7 @@ var path = require('path');
 var User = require('./db/User.js');
 var cookieParser = require('cookie-parser');
 var session = require('express-session');
+var permissions = require('./permissions.js');
 
 var port = process.env.PORT || 3000;
 server.listen(port);
@@ -20,57 +21,72 @@ app.get('/', function (req, res) {
   res.sendFile(path.join(__dirname, '../client/index.html'));
 });
 
-io.set('authorization', function(handshakeData, accept) {
-  var parse = cookieParser('eventsauce');
-  parse(handshakeData, null, function(){
-    console.log(handshakeData.cookies);
-    console.log(handshakeData.signedCookies);
-    accept();
-  })
-})
+io.use(permissions);
 
 io.on('connection', function (socket) {
 
-  socket.on('auth', function (data){
-    console.log('socket:');
-    console.log(socket);
-    User.findOne({ username: data.username }, function(err, user) {
-      console.log(user);
+  // Express middleware, such as cookie-parser, expect f(req, res, next)
+  // Cookie parser modifies the request object in place by 
+  cookieParser('eventsauce')(socket.handshake, null, function(){})
+
+  var socket_id = socket.id;
+  var session_id = socket.handshake.signedCookies['event.sid'];
+
+  // Update this user's socket association if they have a session
+  if (socket_id && session_id) {
+    User.findOne({ session_id: session_id }, function(err, user) {
       if (user) {
-        user.socket_id = socket.id;
+        user.socket_id = socket_id;
+        user.save();
+      }
+    })
+  }
+
+  socket.on('test', function() {
+    console.log('test!');
+  })
+
+  socket.on('auth', function (data){
+
+    // Check if a user exists with provided email
+    User.findOne({ email: data.email }, function(err, user) {
+      if (user) {
+        user.socket_id = socket_id;
+        user.session_id = session_id;
         user.save(function(){
-          socket.emit('success', { message: 'User socket_id successfully updated' });
+          socket.emit('success', { message: 'User auth data successfully updated!' });
         });
-        socket.emit('err', { message: 'That user already exists!' });
       } else {
         new User({
+          email: data.email,
           username: data.username,
-          socket_id: socket.id
+          socket_id: socket_id,
+          session_id: session_id
         }).save(function(err, user) {
           console.log('Added user to database:');
           console.log(user);
-          socket.emit('success', { message: 'User successfully added to database!' });
+          socket.emit('success', { message: 'User account successfully created!' });
         });
       }
     })
   });
 
   socket.on('disconnect', function() {
-    console.log('disconnect');
-    User.findOne({ socket_id: socket.id }, function(err, user) {
+    User.findOne({ socket_id: socket_id }, function(err, user) {
       if (user) {
         user.socket_id = null;
         user.save();
       }
-    })
+    });
   })
 
 });
 
 setInterval(function(){
-  User.find({}, function(err, users) {
+  User.find({ socket_id: {'$ne': null } }, function(err, users) {
     for (var i = 0; i < users.length; i++) {
-      io.to(users[i].socket_id).emit('test', {msg: 'You\'re receiving this message because your socket is ' + users[i].id});
+      console.log('Emitting event to %s', users[i].socket_id);
+      io.to(users[i].socket_id).emit('test', {msg: 'You\'re receiving this message because your socket is ' + users[i].socket_id});
     };
   });
 }, 5000);

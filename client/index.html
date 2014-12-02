@@ -24,8 +24,11 @@
   socket.on('success', function (data) {
     console.log(data.message);
   });
-  var auth = function(username) {
-    socket.emit('auth', { username: username });
+  var auth = function(email, username) {
+    socket.emit('auth', { email: email, username: username });
+  }
+  var test = function() {
+    socket.emit('test', {});
   }
 </script>
 
